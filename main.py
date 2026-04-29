@@ -1,86 +1,125 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import pyodbc
 
 app = FastAPI(title="API Gestor", version="1.0")
 
 # =========================================
-# 🔥 CONEXÃO (IGUAL SUA MACRO)
+# 🔥 CORS (necessário pro Flutter Web)
+# =========================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =========================================
+# 🔥 CONFIG CLIENTES
+# =========================================
+CLIENTES = {
+    "vidros": 323,
+    "fabrica": 7899,
+    "cd": 12035,
+    "armazem": 12124,
+}
+
+# =========================================
+# 🔥 CONEXÃO SQL SERVER (RAILWAY)
 # =========================================
 def get_connection():
     try:
-        conn = pyodbc.connect(
-            "DRIVER={SQL Server};"
+        return pyodbc.connect(
+            "DRIVER={ODBC Driver 17 for SQL Server};"
             "SERVER=sistema.atdata.com.br,35987;"
             "UID=MasterLog;"
             "PWD=Master1252@#;"
+            "Encrypt=no;"
+            "TrustServerCertificate=yes;"
+            "Connection Timeout=5;"
         )
-        return conn
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro conexão: {e}")
-
-
-# =========================================
-# 🔥 CONSULTA PADRÃO (SUA MACRO)
-# =========================================
-def consultar_estoque(cdprop):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    query = """
-    SELECT 
-        cdmaterialestoque,
-        dsmaterialservico,
-        SUM(qtENTRADA) AS ENTRADA,
-        SUM(qtdesaldo) AS SALDO
-    FROM vwr_posicaoestoque
-    WHERE cdpropestoque = ?
-    GROUP BY cdmaterialestoque, dsmaterialservico
-    ORDER BY cdmaterialestoque
-    """
-
-    cursor.execute(query, (cdprop,))
-    colunas = [col[0] for col in cursor.description]
-
-    dados = []
-    for row in cursor.fetchall():
-        dados.append(dict(zip(colunas, row)))
-
-    cursor.close()
-    conn.close()
-
-    return dados
-
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro conexão: {str(e)}"
+        )
 
 # =========================================
-# 🔥 ENDPOINTS INDIVIDUAIS (IGUAL VBA)
+# 🔥 CONSULTA PADRÃO
+# =========================================
+def consultar_estoque(cdprop: int):
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        query = """
+        SELECT 
+            cdmaterialestoque,
+            dsmaterialservico,
+            SUM(qtENTRADA) AS ENTRADA,
+            SUM(qtdesaldo) AS SALDO
+        FROM vwr_posicaoestoque
+        WHERE cdpropestoque = ?
+        GROUP BY cdmaterialestoque, dsmaterialservico
+        ORDER BY cdmaterialestoque
+        """
+
+        cursor.execute(query, (cdprop,))
+        colunas = [col[0] for col in cursor.description]
+
+        dados = [
+            dict(zip(colunas, row))
+            for row in cursor.fetchall()
+        ]
+
+        return {
+            "cliente": cdprop,
+            "total": len(dados),
+            "dados": dados
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro consulta: {str(e)}"
+        )
+
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+        except:
+            pass
+
+# =========================================
+# 🔥 ENDPOINTS
 # =========================================
 
-@app.get("/gestor/vidros")
-def gestor_vidros():
-    return consultar_estoque(323)
+@app.get("/")
+def root():
+    return {"status": "API Gestor rodando"}
 
+# 🔹 endpoint padrão por nome
+@app.get("/gestor/{cliente_nome}")
+def gestor_por_nome(cliente_nome: str):
+    if cliente_nome not in CLIENTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente inválido"
+        )
 
-@app.get("/gestor/fabrica")
-def gestor_fabrica():
-    return consultar_estoque(7899)
+    return consultar_estoque(CLIENTES[cliente_nome])
 
-
-@app.get("/gestor/cd")
-def gestor_cd():
-    return consultar_estoque(12035)
-
-
-@app.get("/gestor/armazem")
-def gestor_armazem():
-    return consultar_estoque(12124)
-
-
-# =========================================
-# 🔥 ENDPOINT DINÂMICO (FLEXÍVEL)
-# =========================================
-@app.get("/gestor/{cdprop}")
-def gestor_dinamico(cdprop: int):
-    if cdprop not in [323, 7899, 12035, 12124]:
+# 🔹 endpoint por código (flexível)
+@app.get("/gestor_codigo/{cdprop}")
+def gestor_por_codigo(cdprop: int):
+    if cdprop not in CLIENTES.values():
         raise HTTPException(
             status_code=400,
             detail="Código inválido"
@@ -88,23 +127,15 @@ def gestor_dinamico(cdprop: int):
 
     return consultar_estoque(cdprop)
 
-
-# =========================================
-# 🔥 TODOS DE UMA VEZ
-# =========================================
+# 🔹 todos os clientes
 @app.get("/gestor")
 def gestor_todos():
-    return {
-        "vidros": consultar_estoque(323),
-        "fabrica": consultar_estoque(7899),
-        "cd": consultar_estoque(12035),
-        "armazem": consultar_estoque(12124),
-    }
+    resultado = {}
 
+    for nome, codigo in CLIENTES.items():
+        try:
+            resultado[nome] = consultar_estoque(codigo)
+        except Exception as e:
+            resultado[nome] = {"erro": str(e)}
 
-# =========================================
-# 🔥 TESTE
-# =========================================
-@app.get("/")
-def root():
-    return {"status": "API Gestor rodando"}
+    return resultado
